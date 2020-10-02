@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"syscall"
 	"time"
 
 	"github.com/kardianos/service"
@@ -17,6 +16,7 @@ import (
 
 // NewGameSenseClockService create a GameSenseClock service
 func NewGameSenseClockService() *GameSenseClockService {
+
 	svcConfig := &service.Config{
 		Name:        "SteelSeriesOLEDClock",
 		DisplayName: "SteelSeries OLED Clock",
@@ -154,11 +154,10 @@ func (c *GameSenseClockService) Start(service service.Service) error {
 	c.TickerDone = make(chan bool)
 
 	go func() {
+		var err error
+		var apiAddress string
 
 		for {
-
-			var err error
-			var apiAddress string
 
 			select {
 			case <-c.TickerDone:
@@ -240,17 +239,7 @@ func (c *GameSenseClockService) discoverGameSenseAPI() (string, error) {
 
 	conn, err := net.Dial("tcp", serverDiscovery.Address)
 	if err != nil {
-		currentErr := err
-		for errors.Unwrap(currentErr) != nil {
-			currentErr = errors.Unwrap(currentErr)
-		}
-
-		var errno syscall.Errno
-		if errors.As(currentErr, &errno) {
-			if errno == syscall.ECONNREFUSED {
-				return "", errors.New("GameSense API address is invalid")
-			}
-		}
+		return "", errors.New("GameSense API address is invalid")
 	}
 	conn.Close()
 
