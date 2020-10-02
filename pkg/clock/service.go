@@ -3,55 +3,70 @@ package clock
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
+	"net"
 	"net/http"
+	"syscall"
 	"time"
 
 	"github.com/kardianos/service"
 )
 
-// NewGameSenseClock create a GameSenseClock
-func NewGameSenseClock() *GameSenseClock {
+// NewGameSenseClockService create a GameSenseClock service
+func NewGameSenseClockService() *GameSenseClockService {
+	svcConfig := &service.Config{
+		Name:        "SteelSeriesOLEDClock",
+		DisplayName: "SteelSeries OLED Clock",
+		Description: "This service communicate with GameSense to display the current date and time.",
+		Arguments: []string{
+			"run",
+		},
+	}
 
-	return &GameSenseClock{
-		Address:    "",
+	gsc := &GameSenseClockService{
 		DateFormat: "2006-01-02",
 		TimeFormat: "15:04",
 	}
+
+	svc, err := service.New(gsc, svcConfig)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	logger, err := svc.Logger(nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	gsc.Service = svc
+	gsc.Logger = logger
+	return gsc
 }
 
-// Init discover the game sense endpoint
-func (c *GameSenseClock) Init(logger service.Logger) {
-	c.Logger = logger
-	for {
-		if c.Address == "" {
-			file, err := ioutil.ReadFile(configFile)
-			if err != nil {
-				c.Logger.Errorf("failed reading configuration file: %s", err)
-				continue
-			}
+// RunService run the underlying service
+func (c *GameSenseClockService) RunService() {
 
-			serverDiscovery := ServerDiscovery{}
-			err = json.Unmarshal(file, &serverDiscovery)
-			if err != nil {
-				c.Logger.Errorf("failed unmarshaling configuration file: %s", err)
-				continue
-			}
-
-			c.Address = serverDiscovery.Address
-			c.Logger.Infof("discovered address: %s", c.Address)
-
-			return
-		}
-
-		c.Logger.Infof("will retry in 1 seconds")
-		time.Sleep(1 * time.Second)
+	if err := c.Service.Run(); err != nil {
+		c.Logger.Error(err)
 	}
 }
 
-// Register the clock in the engine app panel
-func (c *GameSenseClock) Register() error {
+// InstallService the clock in the engine app panel
+func (c *GameSenseClockService) InstallService() {
+	apiAddress, err := c.discoverGameSenseAPI()
+	if err != nil {
+		c.Logger.Error(err)
+		return
+	}
+
+	if err := c.Service.Install(); err != nil {
+		c.Logger.Error(err)
+	} else {
+		c.Logger.Info("service installed")
+	}
 
 	bindingRequest := Binding{
 		Game:          "CLOCK",
@@ -83,9 +98,10 @@ func (c *GameSenseClock) Register() error {
 		},
 	}
 
-	err := c.post("bind_game_event", bindingRequest)
-	if err != nil {
-		return err
+	if err := c.post(apiAddress, "bind_game_event", bindingRequest); err != nil {
+		c.Logger.Error(err)
+	} else {
+		c.Logger.Info("clock added to GameSense")
 	}
 
 	gameMedataRequest := GameMetadata{
@@ -94,31 +110,69 @@ func (c *GameSenseClock) Register() error {
 		Developer:       "Gael Mauleon",
 	}
 
-	return c.post("game_metadata", gameMedataRequest)
-
+	if err := c.post(apiAddress, "game_metadata", gameMedataRequest); err != nil {
+		c.Logger.Error(err)
+	} else {
+		c.Logger.Info("clock configured")
+	}
 }
 
-// Unregister the clock in the engine app panel
-func (c *GameSenseClock) Unregister() error {
+// UninstallService the clock in the engine app panel
+func (c *GameSenseClockService) UninstallService() {
+	apiAddress, err := c.discoverGameSenseAPI()
+	if err != nil {
+		c.Logger.Error(err)
+		return
+	}
+
 	gameRemovalRequest := GameMetadata{
 		Game: "CLOCK",
 	}
-	return c.post("remove_game", gameRemovalRequest)
+	if err := c.post(apiAddress, "remove_game", gameRemovalRequest); err != nil {
+		c.Logger.Error(err)
+	} else {
+		c.Logger.Info("clock removed from GameSense")
+	}
+
+	if err := c.Service.Stop(); err != nil {
+		c.Logger.Error(err)
+	} else {
+		c.Logger.Info("service stopped")
+	}
+
+	if err := c.Service.Uninstall(); err != nil {
+		c.Logger.Error(err)
+	} else {
+		c.Logger.Info("service uninstalled")
+	}
 }
 
-// Start the clock service
-func (c *GameSenseClock) Start(service service.Service) error {
+// Start statisfy the Start service interface
+func (c *GameSenseClockService) Start(service service.Service) error {
 
 	c.Ticker = time.NewTicker(5 * time.Second)
 	c.TickerDone = make(chan bool)
 
 	go func() {
+
 		for {
+
+			var err error
+			var apiAddress string
 
 			select {
 			case <-c.TickerDone:
 				return
 			case t := <-c.Ticker.C:
+
+				if apiAddress == "" {
+					apiAddress, err = c.discoverGameSenseAPI()
+					if err != nil {
+						c.Logger.Error(err)
+						continue
+					}
+				}
+
 				gameEvent := GameEvent{
 					Game:  "CLOCK",
 					Event: "TIME",
@@ -131,7 +185,9 @@ func (c *GameSenseClock) Start(service service.Service) error {
 					},
 				}
 
-				c.post("game_event", gameEvent)
+				if err = c.post(apiAddress, "game_event", gameEvent); err != nil {
+					c.Logger.Error(err)
+				}
 			}
 		}
 	}()
@@ -140,8 +196,8 @@ func (c *GameSenseClock) Start(service service.Service) error {
 	return nil
 }
 
-// Stop the clock service
-func (c *GameSenseClock) Stop(service service.Service) error {
+// Stop satisfy the service interface
+func (c *GameSenseClockService) Stop(service service.Service) error {
 	c.Ticker.Stop()
 	c.TickerDone <- true
 	c.Logger.Info("clock stopped")
@@ -149,10 +205,10 @@ func (c *GameSenseClock) Stop(service service.Service) error {
 	return nil
 }
 
-func (c *GameSenseClock) post(path string, data interface{}) error {
+func (c *GameSenseClockService) post(apiAddress string, path string, data interface{}) error {
 	jsonPayload, _ := json.Marshal(data)
 	client := http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(fmt.Sprintf("http://%s/%s", c.Address, path), "application/json", bytes.NewBuffer(jsonPayload))
+	resp, err := client.Post(fmt.Sprintf("http://%s/%s", apiAddress, path), "application/json", bytes.NewBuffer(jsonPayload))
 
 	if err != nil {
 		return err
@@ -162,11 +218,42 @@ func (c *GameSenseClock) post(path string, data interface{}) error {
 		defer resp.Body.Close()
 		bodyBytes, err := ioutil.ReadAll(resp.Body)
 		if err != nil {
-			c.Logger.Errorf("failed to read http response body: %s", err)
 			return err
 		}
-		c.Logger.Errorf("failed http request: %s - %s", resp.Status, string(bodyBytes))
+		return fmt.Errorf("failed http request: %s - %s", resp.Status, string(bodyBytes))
 	}
 
 	return nil
+}
+
+func (c *GameSenseClockService) discoverGameSenseAPI() (string, error) {
+	file, err := ioutil.ReadFile(configFile)
+	if err != nil {
+		return "", fmt.Errorf("failed reading GameSense configuration file: %s", err)
+	}
+
+	serverDiscovery := ServerDiscovery{}
+	err = json.Unmarshal(file, &serverDiscovery)
+	if err != nil {
+		return "", fmt.Errorf("failed unmarshaling GameSense configuration file: %s", err)
+	}
+
+	conn, err := net.Dial("tcp", serverDiscovery.Address)
+	if err != nil {
+		currentErr := err
+		for errors.Unwrap(currentErr) != nil {
+			currentErr = errors.Unwrap(currentErr)
+		}
+
+		var errno syscall.Errno
+		if errors.As(currentErr, &errno) {
+			if errno == syscall.ECONNREFUSED {
+				return "", errors.New("GameSense API address is invalid")
+			}
+		}
+	}
+	conn.Close()
+
+	c.Logger.Infof("discovered GameSense API address: %s", serverDiscovery.Address)
+	return serverDiscovery.Address, nil
 }

@@ -12,7 +12,7 @@
             "program": "${workspaceFolder}/main.go",
             "env": {},
             "args": [
-                "uninstall"
+                //"uninstall"
             ]
         }
     ]

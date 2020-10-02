@@ -5,15 +5,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var installCmd = &cobra.Command{
-	Use:   "install",
-	Short: "Install the service",
+var runCmd = &cobra.Command{
+	Use:   "run",
+	Short: "Run the service",
 	Run: func(cmd *cobra.Command, args []string) {
 		gs := clock.NewGameSenseClockService()
-		gs.InstallService()
+		gs.RunService()
 	},
 }
 
 func init() {
-	rootCmd.AddCommand(installCmd)
+	rootCmd.AddCommand(runCmd)
 }

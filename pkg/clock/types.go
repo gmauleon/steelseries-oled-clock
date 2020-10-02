@@ -8,16 +8,19 @@ import (
 
 const (
 	configFile = `C:\ProgramData\SteelSeries\SteelSeries Engine 3/coreProps.json`
+	//configFile = `./coreProps.json`
 )
 
-// GameSenseClock represent a clock object
-type GameSenseClock struct {
+// GameSenseClockService represent a clock object
+type GameSenseClockService struct {
 	DateFormat string
 	TimeFormat string
-	Address    string
+
 	Ticker     *time.Ticker
 	TickerDone chan bool
-	Logger     service.Logger
+
+	Service service.Service
+	Logger  service.Logger
 }
 
 // Binding represent a Steelseries GameSense binding request
