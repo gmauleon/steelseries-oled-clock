@@ -11,6 +11,18 @@ const (
 	//configFile = `./coreProps.json`
 )
 
+// State is the main loop state
+type State string
+
+const (
+
+	// StateStandby is when the GameSense is not yet available
+	StateStandby State = "standby"
+
+	// StateActive is when we actively sending events to GameSense
+	StateActive State = "active"
+)
+
 // GameSenseClockService represent a clock object
 type GameSenseClockService struct {
 	DateFormat string
@@ -18,6 +30,8 @@ type GameSenseClockService struct {
 
 	Ticker     *time.Ticker
 	TickerDone chan bool
+
+	State State
 
 	Service service.Service
 	Logger  service.Logger
@@ -70,6 +84,11 @@ type GameEvent struct {
 type GameEventData struct {
 	Value int                `json:"value,omitempty"`
 	Frame GameEventDataFrame `json:"frame,omitempty"`
+}
+
+// GameHeartbeat represent a Steelseries GameSense heartbeat
+type GameHeartbeat struct {
+	Game string `json:"game,omitempty"`
 }
 
 // GameEventDataFrame represent a clock event request

@@ -3,11 +3,9 @@ package clock
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
-	"net"
 	"net/http"
 	"time"
 
@@ -154,8 +152,11 @@ func (c *GameSenseClockService) Start(service service.Service) error {
 	c.TickerDone = make(chan bool)
 
 	go func() {
-		var err error
+
 		var apiAddress string
+		var err error
+
+		c.setState(StateStandby)
 
 		for {
 
@@ -164,28 +165,41 @@ func (c *GameSenseClockService) Start(service service.Service) error {
 				return
 			case t := <-c.Ticker.C:
 
-				if apiAddress == "" {
+				switch c.State {
+				case StateStandby:
 					apiAddress, err = c.discoverGameSenseAPI()
 					if err != nil {
 						c.Logger.Error(err)
 						continue
 					}
-				}
 
-				gameEvent := GameEvent{
-					Game:  "CLOCK",
-					Event: "TIME",
-					Data: GameEventData{
-						Value: 1,
-						Frame: GameEventDataFrame{
-							Date: t.Format("2006-01-02"),
-							Time: t.Format("15:04"),
+					GameHeartbeat := GameHeartbeat{
+						Game: "CLOCK",
+					}
+
+					if err = c.post(apiAddress, "game_heartbeat", GameHeartbeat); err != nil {
+						continue
+					}
+
+					c.setState(StateActive)
+
+				case StateActive:
+					gameEvent := GameEvent{
+						Game:  "CLOCK",
+						Event: "TIME",
+						Data: GameEventData{
+							Value: 1,
+							Frame: GameEventDataFrame{
+								Date: t.Format("2006-01-02"),
+								Time: t.Format("15:04"),
+							},
 						},
-					},
-				}
+					}
 
-				if err = c.post(apiAddress, "game_event", gameEvent); err != nil {
-					c.Logger.Error(err)
+					if err = c.post(apiAddress, "game_event", gameEvent); err != nil {
+						c.Logger.Error(err)
+						c.setState(StateStandby)
+					}
 				}
 			}
 		}
@@ -237,12 +251,10 @@ func (c *GameSenseClockService) discoverGameSenseAPI() (string, error) {
 		return "", fmt.Errorf("failed unmarshaling GameSense configuration file: %s", err)
 	}
 
-	conn, err := net.Dial("tcp", serverDiscovery.Address)
-	if err != nil {
-		return "", errors.New("GameSense API address is invalid")
-	}
-	conn.Close()
-
-	c.Logger.Infof("discovered GameSense API address: %s", serverDiscovery.Address)
 	return serverDiscovery.Address, nil
+}
+
+func (c *GameSenseClockService) setState(state State) {
+	c.State = state
+	c.Logger.Infof("Entering \"%s\" state", state)
 }
